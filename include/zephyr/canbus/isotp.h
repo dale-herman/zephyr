@@ -422,6 +422,10 @@ struct isotp_recv_ctx {
 	uint8_t bs;
 	uint8_t wft;
 	uint8_t sn_expected : 4;
+#if defined(CONFIG_ISOTP_ENABLE_RX_SEMAPHORE)
+        struct k_sem rx_sem;
+#endif
+
 };
 
 /** @endcond */

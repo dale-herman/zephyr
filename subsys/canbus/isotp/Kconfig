@@ -180,6 +180,9 @@ config ISOTP_FIXED_ADDR_RX_MASK
 	default 0x03FFFF00
 	help
 	  CAN filter RX mask
+config ISOTP_ENABLE_RX_SEMAPHORE
+      bool "give semaphore on message, buf or error"
+      default n 
 
 endmenu
 

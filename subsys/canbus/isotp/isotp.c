@@ -12,7 +12,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/timeout_q.h>
 
-LOG_MODULE_REGISTER(isotp, CONFIG_ISOTP_LOG_LEVEL);
+LOG_MODULE_REGISTER(isotp, LOG_LEVEL_DBG);
 
 #ifdef CONFIG_ISOTP_ENABLE_CONTEXT_BUFFERS
 K_MEM_SLAB_DEFINE(ctx_slab, sizeof(struct isotp_send_ctx),
@@ -74,6 +74,7 @@ static inline void receive_report_error(struct isotp_recv_ctx *ctx, int err)
 {
 	ctx->state = ISOTP_RX_STATE_ERR;
 	ctx->error_nr = err;
+
 }
 
 static void receive_can_tx(const struct device *dev, int error, void *arg)
@@ -266,6 +267,9 @@ static void receive_state_machine(struct isotp_recv_ctx *ctx)
 		*ud_rem_len = 0;
 		LOG_DBG("SM process SF of length %d", ctx->length);
 		net_buf_put(&ctx->fifo, ctx->buf);
+#if defined(CONFIG_ISOTP_ENABLE_RX_SEMAPHORE)
+                k_sem_give(&ctx->rx_sem);
+#endif
 		ctx->state = ISOTP_RX_STATE_RECYCLE;
 		receive_state_machine(ctx);
 		break;
@@ -341,6 +345,9 @@ static void receive_state_machine(struct isotp_recv_ctx *ctx)
 
 		k_fifo_cancel_wait(&ctx->fifo);
 		net_buf_unref(ctx->buf);
+#if defined(CONFIG_ISOTP_ENABLE_RX_SEMAPHORE)
+                k_sem_give(&ctx->rx_sem);
+#endif
 		ctx->buf = NULL;
 		ctx->state = ISOTP_RX_STATE_RECYCLE;
 		__fallthrough;
@@ -377,6 +384,7 @@ static void receive_work_handler(struct k_work *item)
 static void process_ff_sf(struct isotp_recv_ctx *ctx, struct can_frame *frame)
 {
 	int index = 0;
+        uint8_t sf_len;
 	uint8_t payload_len;
 	uint32_t rx_sa;		/* ISO-TP fixed source address (if used) */
 
@@ -423,10 +431,13 @@ static void process_ff_sf(struct isotp_recv_ctx *ctx, struct can_frame *frame)
 			return;
 		}
 #endif
-
-		payload_len = index + 1 + (frame->data[index] &
-						ISOTP_PCI_SF_DL_MASK);
-
+                sf_len = frame->data[index] & ISOTP_PCI_SF_DL_MASK;
+                /* Single frames > 16 bytes (CAN-FD only) */
+                if (IS_ENABLED(ISOTP_USE_CAN_FD) && !sf_len) {
+                   sf_len = frame->data[index+1] + 1;
+                }
+		payload_len = index + 1 + sf_len;
+                LOG_INF("SF payload_len=%d", payload_len);
 		if (payload_len > can_dlc_to_bytes(frame->dlc)) {
 			LOG_INF("SF DL does not fit. Ignore");
 			return;
@@ -515,7 +526,10 @@ static void process_cf(struct isotp_recv_ctx *ctx, struct can_frame *frame)
 	if (ctx->length == 0) {
 		ctx->state = ISOTP_RX_STATE_RECYCLE;
 		*ud_rem_len = 0;
-		net_buf_put(&ctx->fifo, ctx->buf);
+		net_buf_put(&ctx->fifo, ctx->buf);  // done here
+#if defined(CONFIG_ISOTP_ENABLE_RX_SEMAPHORE)
+                k_sem_give(&ctx->rx_sem);
+#endif
 		return;
 	}
 
@@ -524,6 +538,9 @@ static void process_cf(struct isotp_recv_ctx *ctx, struct can_frame *frame)
 		ctx->bs = ctx->opts.bs;
 		*ud_rem_len = ctx->length;
 		net_buf_put(&ctx->fifo, ctx->buf);
+#if defined(CONFIG_ISOTP_ENABLE_RX_SEMAPHORE)
+                k_sem_give(&ctx->rx_sem);
+#endif
 		ctx->state = ISOTP_RX_STATE_TRY_ALLOC;
 	}
 }
@@ -576,7 +593,7 @@ static inline int attach_ff_filter(struct isotp_recv_ctx *ctx)
 		.id = ctx->rx_addr.ext_id,
 		.mask = mask
 	};
-
+        LOG_DBG("adding RX filter: id: %x, mask: %x, flags: %x", filter.id, filter.mask, filter.flags);
 	ctx->filter_id = can_add_rx_filter(ctx->can_dev, receive_can_rx, ctx,
 					   &filter);
 	if (ctx->filter_id < 0) {
@@ -1131,7 +1148,7 @@ static inline int attach_fc_filter(struct isotp_send_ctx *ctx)
 		.id = ctx->rx_addr.ext_id,
 		.mask = CAN_EXT_ID_MASK
 	};
-
+        LOG_DBG("adding RX fc ilter: id: %x, mask: %x, flags: %x", filter.id, filter.mask, filter.flags);
 	ctx->filter_id = can_add_rx_filter(ctx->can_dev, send_can_rx_cb, ctx,
 					   &filter);
 	if (ctx->filter_id < 0) {
