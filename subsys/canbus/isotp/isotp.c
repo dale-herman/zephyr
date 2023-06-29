@@ -123,6 +123,7 @@ static void receive_send_fc(struct isotp_recv_ctx *ctx, uint8_t fs)
 		.flags = (ctx->tx_addr.ide != 0 ? CAN_FRAME_IDE : 0) | (IS_ENABLED(ISOTP_USE_CAN_FD) ? CAN_FRAME_FDF : 0),
 		.id = ctx->tx_addr.ext_id
 	};
+
 	uint8_t *data = frame.data;
 	uint8_t payload_len;
 	int ret;
@@ -132,7 +133,7 @@ static void receive_send_fc(struct isotp_recv_ctx *ctx, uint8_t fs)
 	if (ctx->tx_addr.use_ext_addr) {
 		*data++ = ctx->tx_addr.ext_addr;
 	}
-
+        LOG_DBG("sending FC: ID: %x", ctx->tx_addr.ext_id);
 	*data++ = ISOTP_PCI_TYPE_FC | fs;
 	*data++ = ctx->opts.bs;
 	*data++ = ctx->opts.stmin;
@@ -896,8 +897,16 @@ static inline int send_sf(struct isotp_send_ctx *ctx)
 	if (ctx->tx_addr.use_ext_addr) {
 		frame.data[index++] = ctx->tx_addr.ext_addr;
 	}
-
-	frame.data[index++] = ISOTP_PCI_TYPE_SF | len;
+        if (len <= 7 )
+        {
+           frame.data[index++] = ISOTP_PCI_TYPE_SF | len;
+        }
+        else
+        {
+           frame.data[index++] = ISOTP_PCI_TYPE_SF;
+           frame.data[index++] = len;
+        }
+         
 
 	__ASSERT_NO_MSG(len <= ISOTP_CAN_DL - index);
 	memcpy(&frame.data[index], data, len);
